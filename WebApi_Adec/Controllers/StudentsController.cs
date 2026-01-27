@@ -1,7 +1,8 @@
-﻿
+﻿using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.EntityFrameworkCore;
 using WebApi_Adec.Data;
-using WebApi_Adec.Models;
+using WebApi_Adec.Models.Dto;
 using WebApi_Adec.Models.Entity;
 
 namespace WebApi_Adec.Controllers
@@ -9,82 +10,207 @@ namespace WebApi_Adec.Controllers
     //localhost:<port>/api/students -to access this controller 
     [Route("api/[controller]")]
     [ApiController]
+    [Authorize]
     public class StudentsController : ControllerBase
     {
+        private readonly AppDbcontext _dbContext;
 
-        private readonly AppDbcontext _Dbcontext;
-        public StudentsController(AppDbcontext dbcontext)
+        public StudentsController(AppDbcontext dbContext)
         {
-            _Dbcontext = dbcontext;
+            _dbContext = dbContext;
         }
 
+        /********************************************/
+        // GET: api/students
         [HttpGet]
-        public IActionResult GetStudents()
+        public async Task<IActionResult> GetStudents()
         {
-            var allStudents = _Dbcontext.Students.ToList();
-
-            return Ok(allStudents);
-        }
-
-        [HttpPost]
-        public IActionResult PostStudentDetail(AddUpdtStudentDet stdDet)
-        {
-
-            var StdDetail = new Student
+            try
             {
-                Name = stdDet.Name,
-                Email = stdDet.Email,
-                EnrollmentDate = DateTime.Now
-            };
-            _Dbcontext.Students.Add(StdDetail);
-            _Dbcontext.SaveChanges();
+                var allStudents = await _dbContext.Students.ToListAsync();
 
-            return Ok(StdDetail);
+                if (allStudents == null || !allStudents.Any())
+                {
+                    return Ok(new { message = "No students found", data = new List<Student>() });
+                }
+
+                return Ok(new { message = "Students retrieved successfully", data = allStudents });
+            }
+            catch (Exception ex)
+            {
+                return StatusCode(500, new { message = "An error occurred while retrieving students", error = ex.Message });
+            }
         }
 
+        /********************************************/
+        // POST: api/students
+        [HttpPost]
+        public async Task<IActionResult> PostStudentDetail([FromBody] AddUpdtStudentDet stdDet)
+        {
+            try
+            {
+                if (!ModelState.IsValid)
+                {
+                    return BadRequest(ModelState);
+                }
+
+                // Check if email already exists
+                var existingStudent = await _dbContext.Students
+                    .FirstOrDefaultAsync(s => s.Email == stdDet.Email);
+
+                if (existingStudent != null)
+                {
+                    return BadRequest(new { message = "A student with this email already exists" });
+                }
+
+                var stdDetail = new Student
+                {
+                    Name = stdDet.Name,
+                    Email = stdDet.Email,
+                    EnrollmentDate = DateTime.Now
+                };
+
+                await _dbContext.Students.AddAsync(stdDetail);
+                await _dbContext.SaveChangesAsync();
+
+                return CreatedAtAction(nameof(GetStudentByid), new { id = stdDetail.Id },
+                    new { message = "Student created successfully", data = stdDetail });
+            }
+            catch (DbUpdateException dbEx)
+            {
+                return StatusCode(500, new { message = "Database error occurred while creating student", error = dbEx.InnerException?.Message ?? dbEx.Message });
+            }
+            catch (Exception ex)
+            {
+                return StatusCode(500, new { message = "An error occurred while creating student", error = ex.Message });
+            }
+        }
+
+        /********************************************/
+        // GET: api/students/{id}
         [HttpGet]
         [Route("{id:guid}")]
-        public IActionResult GetStudentByid(Guid id)
+        public async Task<IActionResult> GetStudentByid(Guid id)
         {
-            var stdDetId= _Dbcontext.Students.Find(id);
-            if (stdDetId == null)
+            try
             {
-                return NotFound();
+                if (id == Guid.Empty)
+                {
+                    return BadRequest(new { message = "Invalid student ID" });
+                }
+
+                var stdDetId = await _dbContext.Students.FindAsync(id);
+
+                if (stdDetId == null)
+                {
+                    return NotFound(new { message = $"Student with ID {id} not found" });
+                }
+
+                return Ok(new { message = "Student retrieved successfully", data = stdDetId });
             }
-            return Ok(stdDetId);
+            catch (Exception ex)
+            {
+                return StatusCode(500, new { message = "An error occurred while retrieving student", error = ex.Message });
+            }
         }
 
+        /********************************************/
+        // PUT: api/students/{id}
         [HttpPut]
         [Route("{id:guid}")]
-        public async Task<IActionResult> PutStudentDetail(AddUpdtStudentDet stdDet,Guid id)
+        public async Task<IActionResult> PutStudentDetail([FromBody] AddUpdtStudentDet stdDet, Guid id)
         {
-            var StdbyId= await _Dbcontext.Students.FindAsync(id);
-            if (StdbyId == null)
+            try
             {
-                return NotFound();
+                if (!ModelState.IsValid)
+                {
+                    return BadRequest(ModelState);
+                }
+
+                if (id == Guid.Empty)
+                {
+                    return BadRequest(new { message = "Invalid student ID" });
+                }
+
+                var stdById = await _dbContext.Students.FindAsync(id);
+
+                if (stdById == null)
+                {
+                    return NotFound(new { message = $"Student with ID {id} not found" });
+                }
+
+                // Check if email is being changed to one that already exists
+                if (stdById.Email != stdDet.Email)
+                {
+                    var emailExists = await _dbContext.Students
+                        .AnyAsync(s => s.Email == stdDet.Email && s.Id != id);
+
+                    if (emailExists)
+                    {
+                        return BadRequest(new { message = "A student with this email already exists" });
+                    }
+                }
+
+                stdById.Name = stdDet.Name;
+                stdById.Email = stdDet.Email;
+
+                _dbContext.Students.Update(stdById);
+                await _dbContext.SaveChangesAsync();
+
+                return Ok(new { message = "Student updated successfully", data = stdById });
             }
-            StdbyId.Name = stdDet.Name;
-            StdbyId.Email = stdDet.Email;
-
-            _Dbcontext.SaveChanges();
-
-            return Ok(StdbyId);
+            catch (DbUpdateConcurrencyException)
+            {
+                var exists = await _dbContext.Students.AnyAsync(s => s.Id == id);
+                if (!exists)
+                {
+                    return NotFound(new { message = $"Student with ID {id} not found" });
+                }
+                throw;
+            }
+            catch (DbUpdateException dbEx)
+            {
+                return StatusCode(500, new { message = "Database error occurred while updating student", error = dbEx.InnerException?.Message ?? dbEx.Message });
+            }
+            catch (Exception ex)
+            {
+                return StatusCode(500, new { message = "An error occurred while updating student", error = ex.Message });
+            }
         }
 
+        /********************************************/
+        // DELETE: api/students/{id}
         [HttpDelete]
-
         [Route("{id:guid}")]
-        public IActionResult DeleteStudentByid(Guid id)
+        public async Task<IActionResult> DeleteStudentByid(Guid id)
         {
-            var stdbyId = _Dbcontext.Students.Find(id);
-            if (stdbyId == null)
+            try
             {
-                return NotFound();
-            }
+                if (id == Guid.Empty)
+                {
+                    return BadRequest(new { message = "Invalid student ID" });
+                }
 
-            _Dbcontext.Students.Remove(stdbyId);
-            _Dbcontext.SaveChanges();
-            return Ok();
+                var stdById = await _dbContext.Students.FindAsync(id);
+
+                if (stdById == null)
+                {
+                    return NotFound(new { message = $"Student with ID {id} not found" });
+                }
+
+                _dbContext.Students.Remove(stdById);
+                await _dbContext.SaveChangesAsync();
+
+                return Ok(new { message = "Student deleted successfully" });
+            }
+            catch (DbUpdateException dbEx)
+            {
+                return StatusCode(500, new { message = "Database error occurred while deleting student", error = dbEx.InnerException?.Message ?? dbEx.Message });
+            }
+            catch (Exception ex)
+            {
+                return StatusCode(500, new { message = "An error occurred while deleting student", error = ex.Message });
+            }
         }
     }
 }

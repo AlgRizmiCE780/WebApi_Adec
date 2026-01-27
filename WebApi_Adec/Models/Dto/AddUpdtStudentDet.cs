@@ -1,4 +1,4 @@
-﻿namespace WebApi_Adec.Models
+﻿namespace WebApi_Adec.Models.Dto
 {
     public class AddUpdtStudentDet
     {
